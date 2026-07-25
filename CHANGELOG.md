@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-07-25
+
+### Added
+- **Downlink buttons** (`button` platform): the TTN payload decoder announces
+  accepted switch commands via a `_downlink` object in the decoded payload
+  (`{ standheizung: { fport: 12, name: "Standheizung" } }`); the integration
+  automatically creates localized On/Off button entities per switch — no
+  HA-side configuration. Pressing a button replaces the device's downlink
+  queue with one **confirmed** downlink via the TTN application API
+  (`down/replace`, JSON `decoded_payload` encoded by the application's
+  downlink payload formatter). Requires the API key right
+  *"write downlink application traffic"*.
+- Buttons are restored from the entity registry across restarts; fPort and
+  display name resolve from the latest announced metadata.
+- German translations (`translations/de.json`).
+- GitHub workflows: automated releases (stable from `main` via the manifest
+  version, `-beta` prereleases from `dev`) and integration validation.
+
+### Changed
+- README rewritten around the fork's design principle (decoder as the single
+  source of truth) with a feature comparison to the upstream core integration
+  and documentation of the `_sensor_attr` metadata contract.
+
 ## [1.0.0] - 2026-07-25
 
 ### Added
@@ -17,4 +40,5 @@ All notable changes to this project are documented here. The format is based on
 - Forked from the Home Assistant core `thethingsnetwork` integration;
   documentation and issue tracker now point to this repository.
 
+[1.1.0]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.1.0
 [1.0.0]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.0.0

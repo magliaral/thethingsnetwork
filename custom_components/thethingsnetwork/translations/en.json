@@ -1,4 +1,14 @@
 {
+    "entity": {
+        "button": {
+            "downlink_on": {
+                "name": "{name} On"
+            },
+            "downlink_off": {
+                "name": "{name} Off"
+            }
+        }
+    },
     "config": {
         "abort": {
             "already_configured": "Application ID is already configured",

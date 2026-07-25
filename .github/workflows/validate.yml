@@ -1,0 +1,103 @@
+name: Validate
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - dev
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Integration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check manifest.json
+        run: |
+          echo "Validating manifest.json..."
+          if ! jq empty custom_components/thethingsnetwork/manifest.json; then
+            echo "manifest.json is invalid!"
+            exit 1
+          fi
+
+          VERSION=$(jq -r '.version' custom_components/thethingsnetwork/manifest.json)
+          DOMAIN=$(jq -r '.domain' custom_components/thethingsnetwork/manifest.json)
+
+          echo "manifest.json is valid"
+          echo "Domain: ${DOMAIN}"
+          echo "Version: ${VERSION}"
+
+          if [ "${DOMAIN}" != "thethingsnetwork" ]; then
+            echo "Domain should be 'thethingsnetwork', but is '${DOMAIN}'"
+            exit 1
+          fi
+
+      - name: Check translations
+        run: |
+          echo "Validating translations..."
+          if ! jq empty custom_components/thethingsnetwork/strings.json; then
+            echo "strings.json is invalid!"
+            exit 1
+          fi
+
+          for file in custom_components/thethingsnetwork/translations/*.json; do
+            if [ -f "$file" ]; then
+              echo "Checking $file..."
+              if ! jq empty "$file"; then
+                echo "$file is invalid!"
+                exit 1
+              fi
+            fi
+          done
+
+          echo "All translation files are valid"
+
+      - name: Check Python Syntax
+        run: |
+          echo "Checking Python syntax..."
+          python -m py_compile custom_components/thethingsnetwork/*.py
+          echo "Python syntax is correct"
+
+      - name: Check Required Files
+        run: |
+          echo "Checking required files..."
+          REQUIRED_FILES=(
+            "custom_components/thethingsnetwork/__init__.py"
+            "custom_components/thethingsnetwork/manifest.json"
+            "custom_components/thethingsnetwork/strings.json"
+            "hacs.json"
+            "README.md"
+            "LICENSE"
+          )
+
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "Required file missing: $file"
+              exit 1
+            fi
+          done
+
+          echo "All required files present"
+
+      - name: Summary
+        run: |
+          echo "## Validation successful" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- manifest.json: OK" >> "$GITHUB_STEP_SUMMARY"
+          echo "- translations: OK" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Python syntax: OK" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Required files: OK" >> "$GITHUB_STEP_SUMMARY"

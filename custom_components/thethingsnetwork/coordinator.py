@@ -1,19 +1,24 @@
 """The Things Network's integration DataUpdateCoordinator."""
 
+import asyncio
 from datetime import timedelta
 import logging
 
+import aiohttp
 from ttn_client import TTNAuthError, TTNClient
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_KEY, CONF_HOST
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import CONF_APP_ID, POLLING_PERIOD_S
 
 _LOGGER = logging.getLogger(__name__)
+
+DOWNLINK_TIMEOUT_S = 10
 
 
 class TTNCoordinator(DataUpdateCoordinator[TTNClient.DATA_TYPE]):
@@ -68,3 +73,65 @@ class TTNCoordinator(DataUpdateCoordinator[TTNClient.DATA_TYPE]):
 
         # Push data to entities
         self.async_set_updated_data(data)
+
+    async def async_push_downlink(
+        self, device_id: str, field: str, value: bool, fport: int
+    ) -> None:
+        """Replace the device's downlink queue with one confirmed switch command.
+
+        `down/replace` (not push) so that the latest command always wins - for a
+        Class A device only the newest desired state matters. `confirmed` makes
+        the network server retransmit after every uplink until the device
+        acknowledges, which bridges lost RX windows without any HA-side retry.
+        The payload is JSON: the application's downlink payload formatter
+        (encodeDownlink) turns it into the wire format.
+        """
+
+        entry = self.config_entry
+        url = (
+            f"https://{entry.data[CONF_HOST]}/api/v3/as/applications/"
+            f"{entry.data[CONF_APP_ID]}/devices/{device_id}/down/replace"
+        )
+        body = {
+            "downlinks": [
+                {
+                    "f_port": fport,
+                    "decoded_payload": {field: value},
+                    "confirmed": True,
+                    "priority": "NORMAL",
+                }
+            ]
+        }
+
+        session = async_get_clientsession(self.hass)
+        try:
+            async with session.post(
+                url,
+                json=body,
+                headers={"Authorization": f"Bearer {entry.data[CONF_API_KEY]}"},
+                timeout=aiohttp.ClientTimeout(total=DOWNLINK_TIMEOUT_S),
+            ) as response:
+                if response.status in (401, 403):
+                    raise HomeAssistantError(
+                        f"TTN rejected the downlink for {device_id} "
+                        f"(HTTP {response.status}): the API key needs the "
+                        "'write downlink application traffic' right"
+                    )
+                if response.status >= 400:
+                    text = (await response.text())[:200]
+                    raise HomeAssistantError(
+                        f"TTN downlink for {device_id} failed "
+                        f"(HTTP {response.status}): {text}"
+                    )
+        except (TimeoutError, asyncio.TimeoutError, aiohttp.ClientError) as err:
+            raise HomeAssistantError(
+                f"TTN downlink for {device_id} failed: {err}"
+            ) from err
+
+        _LOGGER.info(
+            "Scheduled confirmed downlink for %s: %s=%s (fPort %s)",
+            device_id,
+            field,
+            value,
+            fport,
+        )
