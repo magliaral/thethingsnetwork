@@ -1,0 +1,556 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - 'custom_components/**'
+      - '!custom_components/**/*.md'
+      - 'hacs.json'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: 'Target branch for release'
+        required: true
+        type: choice
+        options:
+          - dev
+          - main
+        default: dev
+      bump:
+        description: 'Bump type override for dev (auto reads latest commit)'
+        required: true
+        type: choice
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+          - none
+        default: auto
+
+concurrency:
+  group: ${{ format('release-{0}-{1}', github.workflow, github.event_name == 'workflow_dispatch' && github.event.inputs.target_branch || github.ref_name) }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Branch-aware release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.actor != 'github-actions[bot]'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.target_branch || github.ref_name }}
+
+      - name: Resolve branch context
+        id: context
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            BRANCH="${{ github.event.inputs.target_branch }}"
+          else
+            BRANCH="${{ github.ref_name }}"
+          fi
+
+          if [ "$BRANCH" = "dev" ]; then
+            MODE="prerelease"
+            PRERELEASE="true"
+          else
+            MODE="release"
+            PRERELEASE="false"
+          fi
+
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Get current version from manifest
+        id: current
+        run: |
+          CURRENT_VERSION=$(jq -r '.version' custom_components/thethingsnetwork/manifest.json)
+          echo "version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Determine bump type from commit messages
+        id: bump
+        if: steps.context.outputs.branch == 'dev'
+        run: |
+          OVERRIDE="auto"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            OVERRIDE="${{ github.event.inputs.bump }}"
+          fi
+
+          if [ "$OVERRIDE" != "auto" ]; then
+            TYPE="$OVERRIDE"
+          else
+            TYPE="none"
+
+            if [ "${{ github.event_name }}" = "push" ]; then
+              BEFORE="${{ github.event.before }}"
+              AFTER="${{ github.sha }}"
+              if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+                MESSAGES=$(git log --no-merges "$BEFORE..$AFTER" --pretty=format:"%s%n%b")
+              else
+                MESSAGES=$(git log --no-merges -50 --pretty=format:"%s%n%b")
+              fi
+            else
+              MESSAGES=$(git log --no-merges -50 --pretty=format:"%s%n%b")
+            fi
+
+            if [ -z "$MESSAGES" ]; then
+              # Fallback if the push range only contained merge commits.
+              MESSAGES=$(git log -1 --pretty=format:"%s%n%b")
+            fi
+
+            TYPE="none"
+
+            # MAJOR: feat(scope)!:, fix(scope)!:, refactor(scope)!:, perf(scope)!: and BREAKING CHANGE
+            if echo "$MESSAGES" | grep -Eqi "^[\"'\`]?(feat|fix|refactor|perf)(\([^)]+\))?!:"; then
+              TYPE="major"
+            elif echo "$MESSAGES" | grep -qi "BREAKING CHANGE:"; then
+              TYPE="major"
+
+            # MINOR: feat: or feat(scope):
+            elif echo "$MESSAGES" | grep -Eqi "^[\"'\`]?(feat)(\([^)]+\))?:"; then
+              TYPE="minor"
+
+            # PATCH: fix/refactor/perf/chore/test/build, each with optional scope
+            elif echo "$MESSAGES" | grep -Eqi "^[\"'\`]?(fix|refactor|perf|chore|test|build)(\([^)]+\))?:"; then
+              TYPE="patch"
+
+            # docs/style (with optional scope) -> none
+            elif echo "$MESSAGES" | grep -Eqi "^[\"'\`]?(docs|style|ci)(\([^)]+\))?:"; then
+              TYPE="none"
+            fi
+          fi
+
+          echo "type=$TYPE" >> "$GITHUB_OUTPUT"
+
+      - name: Plan version and tag
+        id: plan
+        run: |
+          BRANCH="${{ steps.context.outputs.branch }}"
+          CURRENT_VERSION="${{ steps.current.outputs.version }}"
+          BASE_VERSION="${CURRENT_VERSION%%-*}"
+
+          if ! echo "$BASE_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Invalid manifest version: $CURRENT_VERSION"
+            exit 1
+          fi
+
+          if [ "$BRANCH" = "dev" ]; then
+            BUMP_TYPE="${{ steps.bump.outputs.type }}"
+
+            if [ -z "$BUMP_TYPE" ] || [ "$BUMP_TYPE" = "none" ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "skip_reason=No release-relevant commit type detected (bump=none)." >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            IFS='.' read -r major minor patch <<< "$BASE_VERSION"
+            case "$BUMP_TYPE" in
+              major)
+                major=$((major + 1))
+                minor=0
+                patch=0
+                ;;
+              minor)
+                minor=$((minor + 1))
+                patch=0
+                ;;
+              patch)
+                patch=$((patch + 1))
+                ;;
+              *)
+                echo "Unknown bump type: $BUMP_TYPE"
+                exit 1
+                ;;
+            esac
+
+            STABLE_BASE_VERSION="${major}.${minor}.${patch}"
+            NEW_VERSION="${STABLE_BASE_VERSION}-beta.${GITHUB_RUN_NUMBER}"
+            RELEASE_TAG="v${NEW_VERSION}"
+            SHOULD_COMMIT="true"
+            COMMIT_MODE="prerelease"
+          else
+            NEW_VERSION="$BASE_VERSION"
+            RELEASE_TAG="v${NEW_VERSION}"
+            # Main is protected (PR-only). Do not create/push bot commits on main.
+            SHOULD_COMMIT="false"
+            COMMIT_MODE="none"
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "should_commit=$SHOULD_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "commit_mode=$COMMIT_MODE" >> "$GITHUB_OUTPUT"
+
+      - name: Check if tag already exists
+        id: check_tag
+        if: steps.plan.outputs.skip != 'true'
+        run: |
+          TAG="${{ steps.plan.outputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update manifest.json
+        if: steps.plan.outputs.skip != 'true' && steps.check_tag.outputs.exists != 'true' && steps.plan.outputs.should_commit == 'true'
+        run: |
+          NEW_VERSION="${{ steps.plan.outputs.version }}"
+          jq --arg version "$NEW_VERSION" '.version = $version' custom_components/thethingsnetwork/manifest.json > manifest.tmp
+          mv manifest.tmp custom_components/thethingsnetwork/manifest.json
+
+      - name: Normalize manifest.json for main release artifact
+        if: steps.plan.outputs.skip != 'true' && steps.check_tag.outputs.exists != 'true' && steps.context.outputs.branch == 'main' && steps.current.outputs.version != steps.plan.outputs.version
+        run: |
+          NEW_VERSION="${{ steps.plan.outputs.version }}"
+          jq --arg version "$NEW_VERSION" '.version = $version' custom_components/thethingsnetwork/manifest.json > manifest.tmp
+          mv manifest.tmp custom_components/thethingsnetwork/manifest.json
+
+      - name: Commit version bump
+        if: steps.plan.outputs.skip != 'true' && steps.check_tag.outputs.exists != 'true' && steps.plan.outputs.should_commit == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          git add custom_components/thethingsnetwork/manifest.json
+          if [ "${{ steps.plan.outputs.commit_mode }}" = "normalize" ]; then
+            git commit -m "chore(release): normalize version to ${{ steps.plan.outputs.version }}"
+          else
+            git commit -m "chore(release): bump prerelease version to ${{ steps.plan.outputs.version }}"
+          fi
+          git push origin "HEAD:${{ steps.context.outputs.branch }}"
+
+      - name: Create and push tag
+        if: steps.plan.outputs.skip != 'true' && steps.check_tag.outputs.exists != 'true'
+        run: |
+          git tag "${{ steps.plan.outputs.tag }}"
+          git push origin "${{ steps.plan.outputs.tag }}"
+
+      - name: Create ZIP archive
+        if: steps.plan.outputs.skip != 'true' && steps.check_tag.outputs.exists != 'true'
+        run: |
+          cd custom_components/thethingsnetwork
+          zip -r "$GITHUB_WORKSPACE/thethingsnetwork.zip" . \
+            -x "*.pyc" \
+            -x "*__pycache__*" \
+            -x "*.git*" \
+            -x "*.DS_Store"
+
+      - name: Generate release notes
+        if: steps.plan.outputs.skip != 'true' && steps.check_tag.outputs.exists != 'true'
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+
+          if [ -n "$LAST_TAG" ]; then
+            git log "$LAST_TAG"..HEAD --pretty=format:"- %s (%h)" --no-merges > commits.txt
+          else
+            git log -20 --pretty=format:"- %s (%h)" --no-merges > commits.txt
+          fi
+
+          # Remove bot-managed prerelease bump commits from release notes.
+          grep -Evi "^- .*chore\(release\): bump prerelease version to " commits.txt > commits.filtered.txt || true
+          if [ ! -s commits.filtered.txt ]; then
+            echo "- No user-facing changes." > commits.filtered.txt
+          fi
+
+          cat > release_notes.md << EOF
+          ## The Things Network ${{ steps.plan.outputs.tag }}
+
+          Release type: ${{ steps.context.outputs.mode }}
+
+          ### Changes
+          EOF
+
+          cat commits.filtered.txt >> release_notes.md
+
+      - name: Create GitHub release
+        if: steps.plan.outputs.skip != 'true' && steps.check_tag.outputs.exists != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.plan.outputs.tag }}
+          name: The Things Network ${{ steps.plan.outputs.tag }}
+          body_path: release_notes.md
+          files: |
+            thethingsnetwork.zip
+          draft: false
+          prerelease: ${{ steps.context.outputs.prerelease }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup old prereleases and tags
+        if: steps.plan.outputs.skip != 'true' && steps.check_tag.outputs.exists != 'true' && steps.context.outputs.branch == 'dev'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const keepTag = "${{ steps.plan.outputs.tag }}";
+            const prereleaseTagRe = /^v\d+\.\d+\.\d+-beta\.\d+$/;
+
+            const releases = await github.paginate(
+              github.rest.repos.listReleases,
+              { owner, repo, per_page: 100 },
+            );
+
+            const stale = releases.filter((rel) => rel.prerelease && rel.tag_name !== keepTag);
+            core.info(`Found ${stale.length} stale prereleases to delete`);
+
+            for (const rel of stale) {
+              core.info(`Deleting prerelease ${rel.tag_name} (id=${rel.id})`);
+              await github.rest.repos.deleteRelease({
+                owner,
+                repo,
+                release_id: rel.id,
+              });
+
+              try {
+                await github.rest.git.deleteRef({
+                  owner,
+                  repo,
+                  ref: `tags/${rel.tag_name}`,
+                });
+                core.info(`Deleted tag ${rel.tag_name}`);
+              } catch (err) {
+                if (err.status === 404) {
+                  core.info(`Tag ${rel.tag_name} already missing`);
+                } else {
+                  throw err;
+                }
+              }
+            }
+
+            // Also cleanup orphan prerelease tags (without release objects).
+            const tags = await github.paginate(
+              github.rest.repos.listTags,
+              { owner, repo, per_page: 100 },
+            );
+            const stalePrereleaseTags = tags
+              .map((tag) => String(tag.name || ""))
+              .filter((name) => prereleaseTagRe.test(name) && name !== keepTag);
+
+            core.info(`Found ${stalePrereleaseTags.length} stale prerelease tags to delete`);
+            for (const tagName of stalePrereleaseTags) {
+              try {
+                await github.rest.git.deleteRef({
+                  owner,
+                  repo,
+                  ref: `tags/${tagName}`,
+                });
+                core.info(`Deleted orphan prerelease tag ${tagName}`);
+              } catch (err) {
+                if (err.status === 404) {
+                  core.info(`Tag ${tagName} already missing`);
+                } else {
+                  throw err;
+                }
+              }
+            }
+
+      - name: Cleanup old stable releases and tags
+        if: steps.plan.outputs.skip != 'true' && steps.check_tag.outputs.exists != 'true' && steps.context.outputs.branch == 'main'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const keepTag = "${{ steps.plan.outputs.tag }}";
+            const keepLatestCount = 10;
+            const stableTagRe = /^v(\d+)\.(\d+)\.(\d+)$/;
+            const prereleaseTagRe = /^v\d+\.\d+\.\d+-beta\.\d+$/;
+
+            const releases = await github.paginate(
+              github.rest.repos.listReleases,
+              { owner, repo, per_page: 100 },
+            );
+
+            const stable = releases
+              .filter((rel) => !rel.prerelease && !rel.draft)
+              .map((rel) => {
+                const m = stableTagRe.exec(String(rel.tag_name || ""));
+                if (!m) return null;
+                return {
+                  rel,
+                  tag: rel.tag_name,
+                  major: Number(m[1]),
+                  minor: Number(m[2]),
+                  patch: Number(m[3]),
+                };
+              })
+              .filter(Boolean);
+
+            stable.sort((a, b) => {
+              if (a.major !== b.major) return b.major - a.major;
+              if (a.minor !== b.minor) return b.minor - a.minor;
+              if (a.patch !== b.patch) return b.patch - a.patch;
+              const at = new Date(a.rel.published_at || a.rel.created_at || 0).getTime();
+              const bt = new Date(b.rel.published_at || b.rel.created_at || 0).getTime();
+              return bt - at;
+            });
+
+            const keep = new Set([keepTag]);
+
+            // Keep latest N stable releases overall.
+            for (const item of stable.slice(0, keepLatestCount)) {
+              keep.add(item.tag);
+            }
+
+            // Keep newest patch for every major.minor line.
+            const newestPerMinor = new Map();
+            for (const item of stable) {
+              const key = `${item.major}.${item.minor}`;
+              const prev = newestPerMinor.get(key);
+              if (!prev || item.patch > prev.patch) {
+                newestPerMinor.set(key, item);
+              }
+            }
+            for (const item of newestPerMinor.values()) {
+              keep.add(item.tag);
+            }
+
+            // Keep all releases from the highest major line.
+            const maxMajor = stable.reduce((acc, item) => Math.max(acc, item.major), -1);
+            for (const item of stable) {
+              if (item.major === maxMajor) {
+                keep.add(item.tag);
+              }
+            }
+
+            const stale = stable.filter((item) => !keep.has(item.tag));
+            core.info(`Stable releases: ${stable.length}`);
+            core.info(`Keeping: ${keep.size} (latest=${keepLatestCount}, newest per major.minor, highest major line, plus current)`);
+            core.info(`Deleting stale stable releases: ${stale.length}`);
+
+            for (const item of stale) {
+              const rel = item.rel;
+              core.info(`Deleting stable release ${item.tag} (id=${rel.id})`);
+              await github.rest.repos.deleteRelease({
+                owner,
+                repo,
+                release_id: rel.id,
+              });
+
+              try {
+                await github.rest.git.deleteRef({
+                  owner,
+                  repo,
+                  ref: `tags/${item.tag}`,
+                });
+                core.info(`Deleted tag ${item.tag}`);
+              } catch (err) {
+                if (err.status === 404) {
+                  core.info(`Tag ${item.tag} already missing`);
+                } else {
+                  throw err;
+                }
+              }
+            }
+
+            // On main release, remove all prereleases and their tags.
+            const prereleases = releases.filter((rel) => rel.prerelease);
+            core.info(`Deleting all prereleases on main: ${prereleases.length}`);
+            for (const rel of prereleases) {
+              core.info(`Deleting prerelease ${rel.tag_name} (id=${rel.id})`);
+              await github.rest.repos.deleteRelease({
+                owner,
+                repo,
+                release_id: rel.id,
+              });
+
+              try {
+                await github.rest.git.deleteRef({
+                  owner,
+                  repo,
+                  ref: `tags/${rel.tag_name}`,
+                });
+                core.info(`Deleted prerelease tag ${rel.tag_name}`);
+              } catch (err) {
+                if (err.status === 404) {
+                  core.info(`Tag ${rel.tag_name} already missing`);
+                } else {
+                  throw err;
+                }
+              }
+            }
+
+            // Also cleanup orphan stable tags (without release objects),
+            // using the same keep policy as for stable releases.
+            const tags = await github.paginate(
+              github.rest.repos.listTags,
+              { owner, repo, per_page: 100 },
+            );
+            const staleStableTags = tags
+              .map((tag) => String(tag.name || ""))
+              .filter((name) => stableTagRe.test(name) && !keep.has(name));
+
+            core.info(`Found ${staleStableTags.length} stale stable tags to delete`);
+            for (const tagName of staleStableTags) {
+              try {
+                await github.rest.git.deleteRef({
+                  owner,
+                  repo,
+                  ref: `tags/${tagName}`,
+                });
+                core.info(`Deleted orphan stable tag ${tagName}`);
+              } catch (err) {
+                if (err.status === 404) {
+                  core.info(`Tag ${tagName} already missing`);
+                } else {
+                  throw err;
+                }
+              }
+            }
+
+            // Remove orphan prerelease tags as well.
+            const stalePrereleaseTags = tags
+              .map((tag) => String(tag.name || ""))
+              .filter((name) => prereleaseTagRe.test(name));
+
+            core.info(`Found ${stalePrereleaseTags.length} prerelease tags to delete`);
+            for (const tagName of stalePrereleaseTags) {
+              try {
+                await github.rest.git.deleteRef({
+                  owner,
+                  repo,
+                  ref: `tags/${tagName}`,
+                });
+                core.info(`Deleted prerelease tag ${tagName}`);
+              } catch (err) {
+                if (err.status === 404) {
+                  core.info(`Tag ${tagName} already missing`);
+                } else {
+                  throw err;
+                }
+              }
+            }
+
+      - name: Summary (released)
+        if: steps.plan.outputs.skip != 'true' && steps.check_tag.outputs.exists != 'true'
+        run: |
+          echo "## Release created" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Branch: ${{ steps.context.outputs.branch }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Type: ${{ steps.context.outputs.mode }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Tag: ${{ steps.plan.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Version: ${{ steps.plan.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary (skipped)
+        if: steps.plan.outputs.skip == 'true' || steps.check_tag.outputs.exists == 'true'
+        run: |
+          echo "## Release skipped" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ steps.plan.outputs.skip }}" = "true" ]; then
+            echo "- Reason: ${{ steps.plan.outputs.skip_reason }}" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ steps.check_tag.outputs.exists }}" = "true" ]; then
+            echo "- Reason: tag already exists (${{ steps.plan.outputs.tag }})" >> "$GITHUB_STEP_SUMMARY"
+          fi
