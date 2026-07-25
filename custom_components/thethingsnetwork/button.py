@@ -32,6 +32,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from .const import (
     CONF_APP_ID,
     DOMAIN,
+    DOWNLINK_ATTR_BIT,
     DOWNLINK_ATTR_FPORT,
     DOWNLINK_ATTR_NAME,
     DOWNLINK_PREFIX,
@@ -42,7 +43,7 @@ from .entity import TTNDeviceEntity
 _LOGGER = logging.getLogger(__name__)
 
 _UNIQUE_ID_INFIX: Final = "_downlink_"
-_DOWNLINK_ATTRS: Final = (DOWNLINK_ATTR_FPORT, DOWNLINK_ATTR_NAME)
+_DOWNLINK_ATTRS: Final = (DOWNLINK_ATTR_FPORT, DOWNLINK_ATTR_NAME, DOWNLINK_ATTR_BIT)
 
 
 def _downlink_switches(device_uplinks: dict) -> dict[str, dict[str, str]]:
@@ -187,6 +188,25 @@ class TtnDownlinkButton(TTNDeviceEntity, ButtonEntity):
                 f"{self._switch_field} - waiting for the device's next uplink"
             ) from None
 
-        await self.coordinator.async_push_downlink(
-            self._device_id, self._switch_field, self._turn_on, fport
-        )
+        try:
+            bit = int(self._switch_meta(DOWNLINK_ATTR_BIT) or "")
+        except ValueError:
+            bit = None
+
+        if bit is not None:
+            # Encode the mask/values wire format locally and schedule raw
+            # bytes - no dependency on the TTN downlink payload formatter.
+            pair, j = divmod(bit, 8)
+            frame = bytearray(2 * (pair + 1))
+            frame[2 * pair] |= 1 << j
+            if self._turn_on:
+                frame[2 * pair + 1] |= 1 << j
+            await self.coordinator.async_push_downlink(
+                self._device_id, fport, raw=bytes(frame)
+            )
+        else:
+            # Uplink decoder does not announce the bit yet: let the TTN
+            # downlink formatter encode the JSON command.
+            await self.coordinator.async_push_downlink(
+                self._device_id, fport, decoded={self._switch_field: self._turn_on}
+            )

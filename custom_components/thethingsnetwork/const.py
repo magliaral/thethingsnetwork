@@ -20,6 +20,9 @@ POLLING_PERIOD_S = 60
 DOWNLINK_PREFIX = "_downlink_"
 DOWNLINK_ATTR_FPORT = "fport"
 DOWNLINK_ATTR_NAME = "name"
+# When announced, the integration encodes the mask/values wire format itself
+# and schedules raw frm_payload - no dependency on the TTN downlink formatter.
+DOWNLINK_ATTR_BIT = "bit"
 
 # Flat GPS fields emitted by the decoder. Consumed by the device_tracker platform,
 # so the sensor platform must not turn them into entities of their own.

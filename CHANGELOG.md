@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-07-25
+
+### Changed
+- Downlink buttons now encode the mask/values wire format **locally** and
+  schedule raw `frm_payload` when the uplink decoder announces the downlink
+  `bit` (in addition to `fport`/`name`) — no runtime dependency on the TTN
+  downlink payload formatter anymore. Decoders without a `bit` announcement
+  fall back to the previous `decoded_payload` path.
+
 ## [1.1.0] - 2026-07-25
 
 ### Added
@@ -40,5 +49,6 @@ All notable changes to this project are documented here. The format is based on
 - Forked from the Home Assistant core `thethingsnetwork` integration;
   documentation and issue tracker now point to this repository.
 
+[1.2.0]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.2.0
 [1.1.0]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.1.0
 [1.0.0]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.0.0
