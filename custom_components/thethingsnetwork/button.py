@@ -24,7 +24,7 @@ from ttn_client import TTNSensorValue
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -162,12 +162,38 @@ class TtnDownlinkButton(TTNDeviceEntity, ButtonEntity):
 
         self._switch_field = switch_field
         self._turn_on = turn_on
+        self._meta: dict[str, str] = {}
         self._attr_translation_key = "downlink_on" if turn_on else "downlink_off"
         self._attr_icon = "mdi:power" if turn_on else "mdi:power-off"
 
+    async def async_added_to_hass(self) -> None:
+        """Adopt metadata the coordinator has already fetched."""
+        await super().async_added_to_hass()
+        self._adopt_meta()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Refresh the cached announcement from new uplinks."""
+        if self._adopt_meta():
+            self.async_write_ha_state()
+
+    def _adopt_meta(self) -> bool:
+        """Cache the latest announced metadata for this switch.
+
+        The coordinator only carries uplinks newer than its last poll, so for
+        a device uplinking every few minutes MOST polls are empty - reading
+        the announcement live would fail between uplinks. The buttons
+        therefore remember the last announcement they saw.
+        """
+        meta = _downlink_switches(self.device_data).get(self._switch_field)
+        if not meta or meta == self._meta:
+            return False
+        self._meta = dict(meta)
+        return True
+
     def _switch_meta(self, key: str) -> str | None:
-        """Return the announced metadata value for this switch, or None."""
-        return _downlink_switches(self.device_data).get(self._switch_field, {}).get(key)
+        """Return the cached announced metadata value for this switch."""
+        return self._meta.get(key)
 
     @property
     def translation_placeholders(self) -> dict[str, str]:

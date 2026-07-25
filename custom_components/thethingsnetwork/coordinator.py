@@ -139,9 +139,8 @@ class TTNCoordinator(DataUpdateCoordinator[TTNClient.DATA_TYPE]):
             ) from err
 
         _LOGGER.info(
-            "Scheduled confirmed downlink for %s: %s=%s (fPort %s)",
+            "Scheduled confirmed downlink for %s: %s (fPort %s)",
             device_id,
-            field,
-            value,
+            f"frm_payload={raw.hex()}" if raw is not None else f"decoded={decoded}",
             fport,
         )
