@@ -57,17 +57,19 @@ Devices that accept switch commands announce them in the decoded payload:
 
 ```js
 data._downlink = {
-  standheizung: { fport: 12, name: "Standheizung" }
+  standheizung: { fport: 12, bit: 0, name: "Standheizung" }
 };
 ```
 
 For every announced switch the integration automatically creates **two button
 entities** on the TTN device — localized as "Standheizung Ein" / "Standheizung
 Aus" (German) or "… On" / "… Off" (English). Pressing a button replaces the
-device's TTN downlink queue with **one confirmed downlink**
-(`down/replace`, `decoded_payload: {"standheizung": true}`), which the
-application's downlink payload formatter (`encodeDownlink`) turns into the
-wire format.
+device's TTN downlink queue with **one confirmed downlink** (`down/replace`).
+With `bit` announced, the integration encodes the mask/values wire format
+itself and schedules raw `frm_payload` — no runtime dependency on the TTN
+downlink payload formatter. Without `bit` it falls back to scheduling
+`decoded_payload: {"standheizung": true}` for the application's
+`encodeDownlink` to translate.
 
 Notes:
 

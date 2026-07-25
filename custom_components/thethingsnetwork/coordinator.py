@@ -1,6 +1,7 @@
 """The Things Network's integration DataUpdateCoordinator."""
 
 import asyncio
+import base64
 from datetime import timedelta
 import logging
 
@@ -75,7 +76,12 @@ class TTNCoordinator(DataUpdateCoordinator[TTNClient.DATA_TYPE]):
         self.async_set_updated_data(data)
 
     async def async_push_downlink(
-        self, device_id: str, field: str, value: bool, fport: int
+        self,
+        device_id: str,
+        fport: int,
+        *,
+        raw: bytes | None = None,
+        decoded: dict | None = None,
     ) -> None:
         """Replace the device's downlink queue with one confirmed switch command.
 
@@ -83,8 +89,12 @@ class TTNCoordinator(DataUpdateCoordinator[TTNClient.DATA_TYPE]):
         Class A device only the newest desired state matters. `confirmed` makes
         the network server retransmit after every uplink until the device
         acknowledges, which bridges lost RX windows without any HA-side retry.
-        The payload is JSON: the application's downlink payload formatter
-        (encodeDownlink) turns it into the wire format.
+
+        With `raw` the wire-format bytes are scheduled directly (frm_payload) -
+        no dependency on the application's downlink payload formatter. With
+        `decoded` the JSON is scheduled instead and TTN's encodeDownlink turns
+        it into the wire format (fallback for uplink decoders that do not
+        announce the downlink bit yet).
         """
 
         entry = self.config_entry
@@ -92,16 +102,16 @@ class TTNCoordinator(DataUpdateCoordinator[TTNClient.DATA_TYPE]):
             f"https://{entry.data[CONF_HOST]}/api/v3/as/applications/"
             f"{entry.data[CONF_APP_ID]}/devices/{device_id}/down/replace"
         )
-        body = {
-            "downlinks": [
-                {
-                    "f_port": fport,
-                    "decoded_payload": {field: value},
-                    "confirmed": True,
-                    "priority": "NORMAL",
-                }
-            ]
+        downlink: dict = {
+            "f_port": fport,
+            "confirmed": True,
+            "priority": "NORMAL",
         }
+        if raw is not None:
+            downlink["frm_payload"] = base64.b64encode(raw).decode()
+        else:
+            downlink["decoded_payload"] = decoded
+        body = {"downlinks": [downlink]}
 
         session = async_get_clientsession(self.hass)
         try:
