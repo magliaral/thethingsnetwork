@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [1.2.1] - 2026-07-25
+## [1.2.2] - 2026-07-25
 
 ### Fixed
 - Pressing a downlink button raised `NameError: name 'field' is not defined`
@@ -60,7 +60,7 @@ All notable changes to this project are documented here. The format is based on
 - Forked from the Home Assistant core `thethingsnetwork` integration;
   documentation and issue tracker now point to this repository.
 
-[1.2.1]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.2.1
+[1.2.2]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.2.2
 [1.2.0]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.2.0
 [1.1.0]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.1.0
 [1.0.0]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.0.0
