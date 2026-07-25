@@ -85,16 +85,23 @@ class TTNCoordinator(DataUpdateCoordinator[TTNClient.DATA_TYPE]):
     ) -> None:
         """Replace the device's downlink queue with one confirmed switch command.
 
-        `down/replace` (not push) so that the latest command always wins - for a
-        Class A device only the newest desired state matters. `confirmed` makes
-        the network server retransmit after every uplink until the device
-        acknowledges, which bridges lost RX windows without any HA-side retry.
+        `down/replace` (not push) so that per switch the latest command always
+        wins - for a Class A device only the newest desired state matters.
+        `confirmed` makes the network server retransmit after every uplink until
+        the device acknowledges, which bridges lost RX windows without any
+        HA-side retry.
 
         With `raw` the wire-format bytes are scheduled directly (frm_payload) -
-        no dependency on the application's downlink payload formatter. With
-        `decoded` the JSON is scheduled instead and TTN's encodeDownlink turns
-        it into the wire format (fallback for uplink decoders that do not
-        announce the downlink bit yet).
+        no dependency on the application's downlink payload formatter. Before
+        replacing, any commands still pending in the queue on the same fPort are
+        merged bit-wise into the new frame (mask/values pairs, the new command
+        wins on overlapping bits), so commands for *different* switches issued
+        within one uplink interval do not overwrite each other. Reading the
+        queue is best effort - if it fails, the command is scheduled unmerged.
+
+        With `decoded` the JSON is scheduled instead and TTN's encodeDownlink
+        turns it into the wire format (fallback for uplink decoders that do not
+        announce the downlink bit yet); no merge in this path.
         """
 
         entry = self.config_entry
@@ -108,6 +115,18 @@ class TTNCoordinator(DataUpdateCoordinator[TTNClient.DATA_TYPE]):
             "priority": "NORMAL",
         }
         if raw is not None:
+            pending = await self._pending_queue_frames(device_id, fport)
+            queued: bytes | None = None
+            for frame in pending:
+                queued = frame if queued is None else _merge_switch_frames(queued, frame)
+            if queued is not None:
+                raw = _merge_switch_frames(queued, raw)
+            if pending:
+                _LOGGER.info(
+                    "Merged downlink for %s with %d pending command(s)",
+                    device_id,
+                    len(pending),
+                )
             downlink["frm_payload"] = base64.b64encode(raw).decode()
         else:
             downlink["decoded_payload"] = decoded
@@ -144,3 +163,77 @@ class TTNCoordinator(DataUpdateCoordinator[TTNClient.DATA_TYPE]):
             f"frm_payload={raw.hex()}" if raw is not None else f"decoded={decoded}",
             fport,
         )
+
+    async def _pending_queue_frames(self, device_id: str, fport: int) -> list[bytes]:
+        """Return the wire-format frames still queued for `device_id` on `fport`.
+
+        Best effort: any failure (HTTP error, timeout, unexpected body) is
+        logged and yields an empty list - a switch command must go out even
+        when the queue cannot be read; it is then scheduled unmerged, which is
+        exactly the pre-merge behavior.
+        """
+        entry = self.config_entry
+        url = (
+            f"https://{entry.data[CONF_HOST]}/api/v3/as/applications/"
+            f"{entry.data[CONF_APP_ID]}/devices/{device_id}/down"
+        )
+        session = async_get_clientsession(self.hass)
+        try:
+            async with session.get(
+                url,
+                headers={"Authorization": f"Bearer {entry.data[CONF_API_KEY]}"},
+                timeout=aiohttp.ClientTimeout(total=DOWNLINK_TIMEOUT_S),
+            ) as response:
+                if response.status >= 400:
+                    _LOGGER.warning(
+                        "Could not read the downlink queue of %s (HTTP %s) - "
+                        "scheduling unmerged",
+                        device_id,
+                        response.status,
+                    )
+                    return []
+                body = await response.json()
+        except (TimeoutError, asyncio.TimeoutError, aiohttp.ClientError, ValueError) as err:
+            _LOGGER.warning(
+                "Could not read the downlink queue of %s (%s) - scheduling unmerged",
+                device_id,
+                err,
+            )
+            return []
+
+        frames: list[bytes] = []
+        for item in body.get("downlinks") or []:
+            if not isinstance(item, dict) or item.get("f_port") != fport:
+                continue
+            payload = item.get("frm_payload")
+            if not isinstance(payload, str):
+                continue
+            try:
+                frame = base64.b64decode(payload)
+            except (ValueError, TypeError):
+                continue
+            # The mask/values wire format comes in byte pairs; anything else
+            # was not produced by this integration - leave it out of the merge.
+            if frame and len(frame) % 2 == 0:
+                frames.append(frame)
+        return frames
+
+
+def _merge_switch_frames(pending: bytes, new: bytes) -> bytes:
+    """Merge two mask/values wire-format frames; `new` wins on overlapping bits.
+
+    Frames are sequences of [mask][values] byte pairs (pair k covers switch
+    bits 8k..8k+7). The merged frame commands every switch addressed by either
+    frame; where both address the same switch, the new value applies. Bits
+    outside the merged mask stay 0 and are ignored by the device.
+    """
+    size = max(len(pending), len(new))
+    pending = pending.ljust(size, b"\x00")
+    new = new.ljust(size, b"\x00")
+    merged = bytearray(size)
+    for k in range(0, size, 2):
+        old_mask, old_values = pending[k], pending[k + 1]
+        new_mask, new_values = new[k], new[k + 1]
+        merged[k] = old_mask | new_mask
+        merged[k + 1] = (old_values & old_mask & ~new_mask) | (new_values & new_mask)
+    return bytes(merged)
