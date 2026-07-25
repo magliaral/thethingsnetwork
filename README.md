@@ -20,7 +20,7 @@ flows, no per-entity customization in Home Assistant.
 | Sensor entities per decoded field | ✓ | ✓ |
 | **HA metadata from the decoder** (`_sensor_attr`) | — | unit, device_class, state_class, entity_category, display precision, friendly name |
 | **GPS device tracker** (`latitude`/`longitude`) | — | ✓ (with fix validation, restore, no "Null Island") |
-| **Downlink buttons from the decoder** (`_downlink`) | — | auto-created On/Off buttons, confirmed downlinks |
+| **Downlink buttons from the decoder** (`_downlink`) | — | auto-created On/Off buttons, confirmed downlinks, queue merge (multi-switch safe) |
 | Per-device diagnostics (FCnt, last seen) | — | ✓ (restored across restarts) |
 | Quiet-device restore from the entity registry | — | ✓ (devices silent longer than the backfill window keep their entities) |
 | German translations | — | ✓ |
@@ -70,6 +70,15 @@ itself and schedules raw `frm_payload` — no runtime dependency on the TTN
 downlink payload formatter. Without `bit` it falls back to scheduling
 `decoded_payload: {"standheizung": true}` for the application's
 `encodeDownlink` to translate.
+
+Before replacing, the integration reads the pending queue and **merges** any
+commands still waiting on the same fPort bit-wise into the new frame (the new
+command wins on overlapping bits). Commands for *different* switches issued
+within one uplink interval therefore do not overwrite each other, while per
+switch the latest command still wins — the queue always holds exactly one
+combined downlink. Reading the queue is best effort: if it fails, the command
+is scheduled unmerged (the pre-1.3.0 behavior). Queue entries on other fPorts
+or with only a `decoded_payload` are dropped by the replace, as before.
 
 Notes:
 

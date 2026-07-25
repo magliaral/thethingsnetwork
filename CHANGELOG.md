@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-07-25
+
+### Added
+- Downlink buttons now **merge** with the pending downlink queue: before
+  `down/replace`, commands still waiting on the same fPort are folded bit-wise
+  into the new mask/values frame (the new command wins on overlapping bits).
+  Commands for different switches issued within one uplink interval no longer
+  overwrite each other; per switch the latest command still wins. Reading the
+  queue is best effort — on failure the command is scheduled unmerged.
+
 ## [1.2.2] - 2026-07-25
 
 ### Fixed
@@ -60,6 +70,7 @@ All notable changes to this project are documented here. The format is based on
 - Forked from the Home Assistant core `thethingsnetwork` integration;
   documentation and issue tracker now point to this repository.
 
+[1.3.0]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.3.0
 [1.2.2]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.2.2
 [1.2.0]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.2.0
 [1.1.0]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.1.0
