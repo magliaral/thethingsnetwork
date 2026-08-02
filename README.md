@@ -107,13 +107,14 @@ Every TTN device gets an uplink frame counter (`FCnt`) and a last-seen
 timestamp entity, both restored across Home Assistant restarts even when the
 device has been quiet longer than the backfill window.
 
-### Reference decoder
+### Decoder contract reference
 
-A full reference implementation of the uplink/downlink payload formatter
-contract (including `_sensor_attr`, `_downlink`, GPS handling and a
-mask/values downlink wire format for ESPHome relays) lives in
-[esphome-lorabridge/decoder/][decoder] (`uplink.js` + `downlink.js`) — the companion project that
-turns an ESP32 into a LoRaWAN sensor bridge with relay control.
+The uplink/downlink payload formatter contract (including `_sensor_attr`,
+`_downlink`, GPS handling and a mask/values downlink wire format for ESPHome
+relays) is documented in the [esphome-lorabridge][decoder] README — the
+companion project that turns an ESP32 into a LoRaWAN sensor bridge with relay
+control. The formatters themselves are per-application deployment config and
+live in the TTN console, not in a repository.
 
 ## Installation
 
@@ -170,7 +171,7 @@ contributors. Licensed under [Apache 2.0](LICENSE).
 [ttn]: https://www.thethingsnetwork.org/
 [ttn-docs]: https://www.thethingsindustries.com/docs/integrations/storage/
 [angelnu]: https://github.com/angelnu
-[decoder]: https://github.com/magliaral/esphome-lorabridge/tree/main/decoder
+[decoder]: https://github.com/magliaral/esphome-lorabridge#ttn-payload-decoder
 [hacs]: https://hacs.xyz/
 [semver]: https://semver.org/
 [hacs-badge]: https://img.shields.io/badge/HACS-Custom-41BDF5.svg
