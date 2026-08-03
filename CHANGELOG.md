@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - 2026-08-03
+
+### Added
+- New service **`thethingsnetwork.send_downlink`**: schedule a confirmed raw
+  downlink (`text` as ASCII or `payload_base64`) for any device on any fPort -
+  e.g. alert texts for a device-side channel. Payload capped at 51 bytes
+  (EU868 DR0).
+
+### Changed
+- Downlink scheduling now preserves **pending entries on other fPorts**: the
+  queue is read first and foreign-fPort commands are re-scheduled unchanged,
+  so an alert downlink no longer wipes a waiting switch command (and vice
+  versa). The bit-wise merge continues to apply only to same-fPort switch
+  frames; raw service payloads replace their channel without merging.
+
 ## [1.3.0] - 2026-07-25
 
 ### Added
@@ -70,6 +85,7 @@ All notable changes to this project are documented here. The format is based on
 - Forked from the Home Assistant core `thethingsnetwork` integration;
   documentation and issue tracker now point to this repository.
 
+[1.4.0]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.4.0
 [1.3.0]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.3.0
 [1.2.2]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.2.2
 [1.2.0]: https://github.com/magliaral/thethingsnetwork/releases/tag/v1.2.0

@@ -71,14 +71,31 @@ downlink payload formatter. Without `bit` it falls back to scheduling
 `decoded_payload: {"standheizung": true}` for the application's
 `encodeDownlink` to translate.
 
-Before replacing, the integration reads the pending queue and **merges** any
-commands still waiting on the same fPort bit-wise into the new frame (the new
-command wins on overlapping bits). Commands for *different* switches issued
-within one uplink interval therefore do not overwrite each other, while per
-switch the latest command still wins — the queue always holds exactly one
-combined downlink. Reading the queue is best effort: if it fails, the command
-is scheduled unmerged (the pre-1.3.0 behavior). Queue entries on other fPorts
-or with only a `decoded_payload` are dropped by the replace, as before.
+Before replacing, the integration reads the pending queue: entries on **other
+fPorts are re-scheduled unchanged** (an alert text never wipes a waiting
+switch command and vice versa), and same-fPort switch frames are **merged**
+bit-wise into the new frame (the new command wins on overlapping bits).
+Commands for *different* switches issued within one uplink interval therefore
+do not overwrite each other, while per switch the latest command still wins —
+each channel holds exactly one pending downlink. Reading the queue is best
+effort: if it fails, the command is scheduled without preservation/merge.
+
+### Service `thethingsnetwork.send_downlink`
+
+Schedule a confirmed raw downlink for any device — the generic counterpart to
+the switch buttons, e.g. for a device-side alert-text channel:
+
+```yaml
+service: thethingsnetwork.send_downlink
+data:
+  device_id: eui-fd4833485ff93d48
+  fport: 13
+  text: "STURMWARNUNG THUNERSEE SEIT 16:54"
+```
+
+`text` (ASCII) or `payload_base64` (raw), max 51 bytes (EU868 DR0 limit);
+`confirmed` defaults to on. The payload replaces whatever is pending on the
+same fPort (latest state wins) and keeps other fPorts queued.
 
 Notes:
 
@@ -107,13 +124,14 @@ Every TTN device gets an uplink frame counter (`FCnt`) and a last-seen
 timestamp entity, both restored across Home Assistant restarts even when the
 device has been quiet longer than the backfill window.
 
-### Reference decoder
+### Decoder contract reference
 
-A full reference implementation of the uplink/downlink payload formatter
-contract (including `_sensor_attr`, `_downlink`, GPS handling and a
-mask/values downlink wire format for ESPHome relays) lives in
-[esphome-lorabridge/decoder/][decoder] (`uplink.js` + `downlink.js`) — the companion project that
-turns an ESP32 into a LoRaWAN sensor bridge with relay control.
+The uplink/downlink payload formatter contract (including `_sensor_attr`,
+`_downlink`, GPS handling and a mask/values downlink wire format for ESPHome
+relays) is documented in the [esphome-lorabridge][decoder] README — the
+companion project that turns an ESP32 into a LoRaWAN sensor bridge with relay
+control. The formatters themselves are per-application deployment config and
+live in the TTN console, not in a repository.
 
 ## Installation
 
@@ -170,7 +188,7 @@ contributors. Licensed under [Apache 2.0](LICENSE).
 [ttn]: https://www.thethingsnetwork.org/
 [ttn-docs]: https://www.thethingsindustries.com/docs/integrations/storage/
 [angelnu]: https://github.com/angelnu
-[decoder]: https://github.com/magliaral/esphome-lorabridge/tree/main/decoder
+[decoder]: https://github.com/magliaral/esphome-lorabridge#ttn-payload-decoder
 [hacs]: https://hacs.xyz/
 [semver]: https://semver.org/
 [hacs-badge]: https://img.shields.io/badge/HACS-Custom-41BDF5.svg

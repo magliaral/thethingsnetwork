@@ -32,5 +32,33 @@
         "title": "Connect to The Things Network v3"
       }
     }
+  },
+  "services": {
+    "send_downlink": {
+      "name": "Send downlink",
+      "description": "Schedule a confirmed raw downlink for a TTN device (replaces pending commands on the same fPort, keeps other fPorts queued).",
+      "fields": {
+        "device_id": {
+          "name": "Device ID",
+          "description": "TTN end device ID (e.g. eui-...)."
+        },
+        "fport": {
+          "name": "fPort",
+          "description": "LoRaWAN fPort of the channel (1-223)."
+        },
+        "text": {
+          "name": "Text",
+          "description": "ASCII payload, max 51 bytes (EU868 DR0). Mutually exclusive with payload_base64."
+        },
+        "payload_base64": {
+          "name": "Payload (base64)",
+          "description": "Raw payload as base64. Mutually exclusive with text."
+        },
+        "confirmed": {
+          "name": "Confirmed",
+          "description": "Retransmit until the device acknowledges (default on)."
+        }
+      }
+    }
   }
 }

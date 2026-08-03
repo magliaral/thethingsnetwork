@@ -82,26 +82,31 @@ class TTNCoordinator(DataUpdateCoordinator[TTNClient.DATA_TYPE]):
         *,
         raw: bytes | None = None,
         decoded: dict | None = None,
+        merge: bool = True,
+        confirmed: bool = True,
     ) -> None:
-        """Replace the device's downlink queue with one confirmed switch command.
+        """Replace the device's downlink queue, keeping other channels intact.
 
-        `down/replace` (not push) so that per switch the latest command always
-        wins - for a Class A device only the newest desired state matters.
-        `confirmed` makes the network server retransmit after every uplink until
-        the device acknowledges, which bridges lost RX windows without any
-        HA-side retry.
+        `down/replace` (not push) so that per channel (fPort) the latest
+        command always wins - for a Class A device only the newest desired
+        state matters. `confirmed` makes the network server retransmit after
+        every uplink until the device acknowledges, which bridges lost RX
+        windows without any HA-side retry.
+
+        The pending queue is read first (best effort) and every entry on a
+        *different* fPort is re-scheduled unchanged, so e.g. an alert text on
+        fPort 13 never wipes a waiting switch command on fPort 12.
 
         With `raw` the wire-format bytes are scheduled directly (frm_payload) -
-        no dependency on the application's downlink payload formatter. Before
-        replacing, any commands still pending in the queue on the same fPort are
-        merged bit-wise into the new frame (mask/values pairs, the new command
-        wins on overlapping bits), so commands for *different* switches issued
-        within one uplink interval do not overwrite each other. Reading the
-        queue is best effort - if it fails, the command is scheduled unmerged.
+        no dependency on the application's downlink payload formatter. With
+        `merge` (switch commands only), pending same-fPort mask/values frames
+        are folded bit-wise into the new frame (the new command wins on
+        overlapping bits). Without `merge` (e.g. text payloads) the new frame
+        simply replaces any pending same-fPort entry.
 
         With `decoded` the JSON is scheduled instead and TTN's encodeDownlink
         turns it into the wire format (fallback for uplink decoders that do not
-        announce the downlink bit yet); no merge in this path.
+        announce the downlink bit yet); never merged.
         """
 
         entry = self.config_entry
@@ -111,26 +116,40 @@ class TTNCoordinator(DataUpdateCoordinator[TTNClient.DATA_TYPE]):
         )
         downlink: dict = {
             "f_port": fport,
-            "confirmed": True,
+            "confirmed": confirmed,
             "priority": "NORMAL",
         }
+
+        pending = await self._pending_queue_items(device_id)
+        preserved = [item for item in pending if item.get("f_port") != fport]
+
         if raw is not None:
-            pending = await self._pending_queue_frames(device_id, fport)
-            queued: bytes | None = None
-            for frame in pending:
-                queued = frame if queued is None else _merge_switch_frames(queued, frame)
-            if queued is not None:
-                raw = _merge_switch_frames(queued, raw)
-            if pending:
-                _LOGGER.info(
-                    "Merged downlink for %s with %d pending command(s)",
-                    device_id,
-                    len(pending),
-                )
+            if merge:
+                queued: bytes | None = None
+                merged_count = 0
+                for item in pending:
+                    if item.get("f_port") != fport:
+                        continue
+                    frame = _decode_switch_frame(item)
+                    if frame is None:
+                        continue
+                    queued = (
+                        frame
+                        if queued is None
+                        else _merge_switch_frames(queued, frame)
+                    )
+                    merged_count += 1
+                if queued is not None:
+                    raw = _merge_switch_frames(queued, raw)
+                    _LOGGER.info(
+                        "Merged downlink for %s with %d pending command(s)",
+                        device_id,
+                        merged_count,
+                    )
             downlink["frm_payload"] = base64.b64encode(raw).decode()
         else:
             downlink["decoded_payload"] = decoded
-        body = {"downlinks": [downlink]}
+        body = {"downlinks": [*preserved, downlink]}
 
         session = async_get_clientsession(self.hass)
         try:
@@ -164,13 +183,15 @@ class TTNCoordinator(DataUpdateCoordinator[TTNClient.DATA_TYPE]):
             fport,
         )
 
-    async def _pending_queue_frames(self, device_id: str, fport: int) -> list[bytes]:
-        """Return the wire-format frames still queued for `device_id` on `fport`.
+    async def _pending_queue_items(self, device_id: str) -> list[dict]:
+        """Return the downlink queue items still pending for `device_id`.
 
-        Best effort: any failure (HTTP error, timeout, unexpected body) is
-        logged and yields an empty list - a switch command must go out even
-        when the queue cannot be read; it is then scheduled unmerged, which is
-        exactly the pre-merge behavior.
+        Every item is reduced to the keys a `down/replace` accepts back
+        (f_port, payload, confirmed, priority) so foreign-fPort entries can be
+        re-scheduled verbatim. Best effort: any failure (HTTP error, timeout,
+        unexpected body) is logged and yields an empty list - a command must
+        go out even when the queue cannot be read; it is then scheduled
+        without preservation/merge, which matches the pre-1.3 behavior.
         """
         entry = self.config_entry
         url = (
@@ -201,22 +222,40 @@ class TTNCoordinator(DataUpdateCoordinator[TTNClient.DATA_TYPE]):
             )
             return []
 
-        frames: list[bytes] = []
+        items: list[dict] = []
         for item in body.get("downlinks") or []:
-            if not isinstance(item, dict) or item.get("f_port") != fport:
+            if not isinstance(item, dict) or not isinstance(item.get("f_port"), int):
                 continue
-            payload = item.get("frm_payload")
-            if not isinstance(payload, str):
+            clean: dict = {"f_port": item["f_port"]}
+            if isinstance(item.get("frm_payload"), str):
+                clean["frm_payload"] = item["frm_payload"]
+            elif isinstance(item.get("decoded_payload"), dict):
+                clean["decoded_payload"] = item["decoded_payload"]
+            else:
                 continue
-            try:
-                frame = base64.b64decode(payload)
-            except (ValueError, TypeError):
-                continue
-            # The mask/values wire format comes in byte pairs; anything else
-            # was not produced by this integration - leave it out of the merge.
-            if frame and len(frame) % 2 == 0:
-                frames.append(frame)
-        return frames
+            clean["confirmed"] = bool(item.get("confirmed", False))
+            if isinstance(item.get("priority"), str):
+                clean["priority"] = item["priority"]
+            items.append(clean)
+        return items
+
+
+def _decode_switch_frame(item: dict) -> bytes | None:
+    """Decode a queue item into a mask/values frame, or None if it is not one.
+
+    The mask/values wire format comes in byte pairs; anything else was not
+    produced by this integration's switch channel - leave it out of the merge.
+    """
+    payload = item.get("frm_payload")
+    if not isinstance(payload, str):
+        return None
+    try:
+        frame = base64.b64decode(payload)
+    except (ValueError, TypeError):
+        return None
+    if frame and len(frame) % 2 == 0:
+        return frame
+    return None
 
 
 def _merge_switch_frames(pending: bytes, new: bytes) -> bytes:
