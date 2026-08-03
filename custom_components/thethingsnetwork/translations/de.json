@@ -1,56 +1,84 @@
 {
-    "entity": {
-        "button": {
-            "downlink_on": {
-                "name": "{name} Ein"
-            },
-            "downlink_off": {
-                "name": "{name} Aus"
-            }
-        }
-    },
-    "config": {
-        "abort": {
-            "already_configured": "Die Application-ID ist bereits konfiguriert",
-            "reauth_successful": "Die erneute Authentifizierung war erfolgreich",
-            "reconfigure_successful": "Die Neukonfiguration war erfolgreich"
-        },
-        "error": {
-            "invalid_auth": "Ungültige Authentifizierung",
-            "unknown": "Unerwarteter Fehler"
-        },
-        "step": {
-            "reauth_confirm": {
-                "description": "Die Verbindung zur The-Things-Network-Application ist fehlgeschlagen.\n\nBitte prüfe die Zugangsdaten."
-            },
-            "reconfigure": {
-                "data": {
-                    "first_fetch_h": "Initialer Abrufzeitraum"
-                },
-                "data_description": {
-                    "first_fetch_h": "Wie viele Stunden historischer Daten abgerufen werden"
-                }
-            },
-            "user": {
-                "data": {
-                    "api_key": "API-Schlüssel",
-                    "app_id": "Application-ID",
-                    "host": "Host"
-                },
-                "description": "Gib den API-Hostnamen, die Application-ID und den API-Schlüssel für Home Assistant ein.\n\n[Anleitung lesen]({instructions_url}): Application registrieren und API-Schlüssel erstellen.",
-                "title": "Mit The Things Network v3 verbinden"
-            }
-        }
-    },
-    "selector": {
-        "first_fetch_h": {
-            "options": {
-                "1": "Letzte Stunde",
-                "12": "Letzte 12 Stunden",
-                "24": "Letzte 24 Stunden",
-                "3": "Letzte 3 Stunden",
-                "6": "Letzte 6 Stunden"
-            }
-        }
+  "entity": {
+    "button": {
+      "downlink_on": {
+        "name": "{name} Ein"
+      },
+      "downlink_off": {
+        "name": "{name} Aus"
+      }
     }
+  },
+  "config": {
+    "abort": {
+      "already_configured": "Die Application-ID ist bereits konfiguriert",
+      "reauth_successful": "Die erneute Authentifizierung war erfolgreich",
+      "reconfigure_successful": "Die Neukonfiguration war erfolgreich"
+    },
+    "error": {
+      "invalid_auth": "Ungültige Authentifizierung",
+      "unknown": "Unerwarteter Fehler"
+    },
+    "step": {
+      "reauth_confirm": {
+        "description": "Die Verbindung zur The-Things-Network-Application ist fehlgeschlagen.\n\nBitte prüfe die Zugangsdaten."
+      },
+      "reconfigure": {
+        "data": {
+          "first_fetch_h": "Initialer Abrufzeitraum"
+        },
+        "data_description": {
+          "first_fetch_h": "Wie viele Stunden historischer Daten abgerufen werden"
+        }
+      },
+      "user": {
+        "data": {
+          "api_key": "API-Schlüssel",
+          "app_id": "Application-ID",
+          "host": "Host"
+        },
+        "description": "Gib den API-Hostnamen, die Application-ID und den API-Schlüssel für Home Assistant ein.\n\n[Anleitung lesen]({instructions_url}): Application registrieren und API-Schlüssel erstellen.",
+        "title": "Mit The Things Network v3 verbinden"
+      }
+    }
+  },
+  "selector": {
+    "first_fetch_h": {
+      "options": {
+        "1": "Letzte Stunde",
+        "12": "Letzte 12 Stunden",
+        "24": "Letzte 24 Stunden",
+        "3": "Letzte 3 Stunden",
+        "6": "Letzte 6 Stunden"
+      }
+    }
+  },
+  "services": {
+    "send_downlink": {
+      "name": "Downlink senden",
+      "description": "Plant einen bestätigten Roh-Downlink für ein TTN-Gerät (ersetzt wartende Befehle auf demselben fPort, andere fPorts bleiben in der Queue).",
+      "fields": {
+        "device_id": {
+          "name": "Geräte-ID",
+          "description": "TTN End-Device-ID (z. B. eui-...)."
+        },
+        "fport": {
+          "name": "fPort",
+          "description": "LoRaWAN-fPort des Kanals (1-223)."
+        },
+        "text": {
+          "name": "Text",
+          "description": "ASCII-Payload, max. 51 Bytes (EU868 DR0). Schließt payload_base64 aus."
+        },
+        "payload_base64": {
+          "name": "Payload (Base64)",
+          "description": "Roh-Payload als Base64. Schließt text aus."
+        },
+        "confirmed": {
+          "name": "Bestätigt",
+          "description": "Wiederholt senden, bis das Gerät bestätigt (Standard: an)."
+        }
+      }
+    }
+  }
 }

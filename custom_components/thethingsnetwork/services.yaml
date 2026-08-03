@@ -1,0 +1,30 @@
+send_downlink:
+  fields:
+    device_id:
+      required: true
+      example: "eui-fd4833485ff93d48"
+      selector:
+        text:
+    fport:
+      required: true
+      example: 13
+      selector:
+        number:
+          min: 1
+          max: 223
+          mode: box
+    text:
+      required: false
+      example: "STURMWARNUNG THUNERSEE SEIT 16:54"
+      selector:
+        text:
+    payload_base64:
+      required: false
+      example: "AQE="
+      selector:
+        text:
+    confirmed:
+      required: false
+      default: true
+      selector:
+        boolean:
